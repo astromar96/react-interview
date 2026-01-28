@@ -1,5 +1,5 @@
 import { parseMarkdownQuestions, getAllQuestions, getTotalQuestionCount } from './parser';
-import rawQuestions from './questions.md?raw';
+import { rawQuestions } from './questions/index';
 
 // Parse the markdown content into structured data
 export const categories = parseMarkdownQuestions(rawQuestions);
