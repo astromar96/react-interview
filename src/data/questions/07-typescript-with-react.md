@@ -885,3 +885,1111 @@ function Profile({ id }: { id: string }) {
 **Senior insight:** TypeScript types are erased at runtime - API responses can't be trusted to match types. Use Zod/io-ts for runtime validation on untrusted boundaries (external APIs). For internal APIs you control, type-only approaches are often sufficient. Branded types prevent ID mix-ups at compile time. The Result pattern makes error handling explicit but adds verbosity - use judiciously.
 
 ---
+
+### Q: How do you use template literal types for design tokens and CSS-in-JS?
+
+**Answer:**
+
+Template literal types allow you to create strongly-typed string patterns, perfect for design systems with consistent spacing, colors, and responsive props.
+
+**Basic Template Literal Types:**
+
+```typescript
+// Simple pattern matching
+type Greeting = `Hello, ${string}!`;
+const valid: Greeting = 'Hello, World!'; // ✅
+const invalid: Greeting = 'Hi, World!';   // ❌ Type error
+
+// Combining literals
+type Size = 'sm' | 'md' | 'lg';
+type Breakpoint = 'mobile' | 'tablet' | 'desktop';
+type ResponsiveSize = `${Size}-${Breakpoint}`;
+// Result: 'sm-mobile' | 'sm-tablet' | 'sm-desktop' | 'md-mobile' | ...
+```
+
+**Design Token Spacing:**
+
+```typescript
+// Spacing scale (4px base)
+type SpacingValue = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 | 12 | 16 | 20 | 24;
+type SpacingUnit = 'px' | 'rem';
+type Spacing = SpacingValue | `${SpacingValue}${SpacingUnit}`;
+
+interface BoxProps {
+  padding?: Spacing;
+  margin?: Spacing;
+  gap?: Spacing;
+}
+
+function Box({ padding, margin, gap }: BoxProps) {
+  const style = {
+    padding: typeof padding === 'number' ? `${padding * 4}px` : padding,
+    margin: typeof margin === 'number' ? `${margin * 4}px` : margin,
+    gap: typeof gap === 'number' ? `${gap * 4}px` : gap,
+  };
+  return <div style={style} />;
+}
+
+// Usage
+<Box padding={4} />        // ✅ 16px
+<Box padding="16px" />     // ✅ explicit
+<Box padding={7} />        // ❌ Error: 7 not in scale
+<Box padding="15px" />     // ❌ Error: not in type
+```
+
+**Typed Color Palette:**
+
+```typescript
+// Color with opacity variations
+type ColorName = 'primary' | 'secondary' | 'success' | 'error' | 'warning';
+type ColorShade = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+type Color = ColorName | `${ColorName}-${ColorShade}`;
+
+interface TextProps {
+  color?: Color;
+  bg?: Color;
+}
+
+// Map to actual CSS values
+const colorMap: Record<Color, string> = {
+  'primary': '#3B82F6',
+  'primary-50': '#EFF6FF',
+  'primary-100': '#DBEAFE',
+  'primary-500': '#3B82F6',
+  'primary-900': '#1E3A8A',
+  // ... etc
+};
+
+function Text({ color = 'primary', children }: TextProps & { children: React.ReactNode }) {
+  return <span style={{ color: colorMap[color] }}>{children}</span>;
+}
+
+// Usage
+<Text color="primary-500">Hello</Text>  // ✅
+<Text color="brand">Hello</Text>        // ❌ Error: not a valid color
+```
+
+**Responsive Props (Tailwind-style):**
+
+```typescript
+// Breakpoint prefixed props
+type Breakpoint = 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+type SpacingKey = 'p' | 'px' | 'py' | 'pt' | 'pb' | 'pl' | 'pr' | 'm' | 'mx' | 'my';
+type SpacingScale = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 10 | 12;
+
+// Generate all responsive spacing classes
+type ResponsiveSpacing =
+  | `${SpacingKey}-${SpacingScale}`
+  | `${Breakpoint}:${SpacingKey}-${SpacingScale}`;
+
+// Example: 'p-4' | 'sm:p-4' | 'md:p-4' | 'px-2' | 'lg:mx-8' | ...
+
+interface TailwindProps {
+  className?: ResponsiveSpacing | ResponsiveSpacing[];
+}
+
+// Type-safe Tailwind-like classes
+function classNames(...classes: (ResponsiveSpacing | undefined)[]): string {
+  return classes.filter(Boolean).join(' ');
+}
+
+// Usage
+<div className={classNames('p-4', 'md:p-6', 'lg:p-8')} />  // ✅
+<div className={classNames('p-4', 'md:p-15')} />           // ❌ 15 not in scale
+```
+
+**CSS Grid/Flex Values:**
+
+```typescript
+// Typed CSS values
+type FlexDirection = 'row' | 'column' | 'row-reverse' | 'column-reverse';
+type JustifyContent = 'start' | 'end' | 'center' | 'between' | 'around' | 'evenly';
+type AlignItems = 'start' | 'end' | 'center' | 'baseline' | 'stretch';
+
+type GridCols = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+type GridTemplate = `repeat(${GridCols}, 1fr)` | `${GridCols}fr`;
+
+interface FlexProps {
+  direction?: FlexDirection;
+  justify?: JustifyContent;
+  align?: AlignItems;
+  gap?: SpacingValue;
+}
+
+interface GridProps {
+  cols?: GridCols;
+  template?: GridTemplate;
+  gap?: SpacingValue;
+}
+
+function Flex({ direction = 'row', justify = 'start', align = 'stretch', gap = 0 }: FlexProps) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: direction,
+        justifyContent: justify === 'between' ? 'space-between' : justify,
+        alignItems: align,
+        gap: gap * 4,
+      }}
+    />
+  );
+}
+```
+
+**CSS Custom Properties:**
+
+```typescript
+// Typed CSS variables
+type CSSVariableName = 'color-primary' | 'color-secondary' | 'spacing-base' | 'font-size-base';
+type CSSVariable = `var(--${CSSVariableName})`;
+
+interface ThemedProps {
+  color?: Color | CSSVariable;
+  spacing?: Spacing | CSSVariable;
+}
+
+// Usage
+<Box color="var(--color-primary)" spacing="var(--spacing-base)" />
+<Box color="var(--invalid-var)" />  // ❌ Error if not in CSSVariableName
+```
+
+**Mapped Types for Design Tokens:**
+
+```typescript
+// Generate props from token object
+const spacing = {
+  xs: '4px',
+  sm: '8px',
+  md: '16px',
+  lg: '24px',
+  xl: '32px',
+} as const;
+
+type SpacingToken = keyof typeof spacing;
+
+// Auto-generate responsive spacing props
+type SpacingProps = {
+  [K in `${'p' | 'm' | 'gap'}${'' | 'x' | 'y' | 't' | 'b' | 'l' | 'r'}`]?: SpacingToken;
+};
+
+// Result: { p?: 'xs'|'sm'|..., px?: ..., py?: ..., m?: ..., gap?: ... }
+```
+
+**With styled-components:**
+
+```typescript
+import styled from 'styled-components';
+
+type ThemeColor = 'primary' | 'secondary' | 'success' | 'error';
+type ThemeSpacing = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+
+interface ButtonProps {
+  variant?: ThemeColor;
+  size?: ThemeSpacing;
+}
+
+const Button = styled.button<ButtonProps>`
+  background: ${({ variant = 'primary', theme }) => theme.colors[variant]};
+  padding: ${({ size = 'md', theme }) => theme.spacing[size]};
+`;
+
+// Theme type ensures colors/spacing keys exist
+declare module 'styled-components' {
+  export interface DefaultTheme {
+    colors: Record<ThemeColor, string>;
+    spacing: Record<ThemeSpacing, string>;
+  }
+}
+```
+
+**Senior insight:** Template literal types shine for design systems with a finite set of valid values. They catch typos at compile time and provide excellent autocomplete. However, they add complexity - use them when you have a stable design token system. For prototyping, plain strings with runtime validation may be simpler. TypeScript 4.1+ supports template literal types; ensure your tsconfig target supports them.
+
+---
+
+### Q: How do you type generic components in React?
+
+**Answer:**
+
+Generic components let you write reusable, type-safe components that work with any data type while preserving type information through the component tree.
+
+**Basic Generic Component:**
+
+```typescript
+// Generic list that works with any item type
+interface ListProps<T> {
+  items: T[];
+  renderItem: (item: T, index: number) => React.ReactNode;
+  keyExtractor: (item: T) => string | number;
+}
+
+function List<T>({ items, renderItem, keyExtractor }: ListProps<T>) {
+  return (
+    <ul>
+      {items.map((item, index) => (
+        <li key={keyExtractor(item)}>
+          {renderItem(item, index)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Usage - T is inferred from items
+interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+const users: User[] = [{ id: '1', name: 'John', email: 'john@example.com' }];
+
+<List
+  items={users}
+  keyExtractor={(user) => user.id}  // user is User
+  renderItem={(user) => <span>{user.name}</span>}  // user is User
+/>
+```
+
+**Generic with Constraints:**
+
+```typescript
+// Constraint: items must have an 'id' property
+interface WithId {
+  id: string | number;
+}
+
+interface SelectProps<T extends WithId> {
+  items: T[];
+  value: T | null;
+  onChange: (item: T) => void;
+  getLabel: (item: T) => string;
+}
+
+function Select<T extends WithId>({
+  items,
+  value,
+  onChange,
+  getLabel,
+}: SelectProps<T>) {
+  return (
+    <select
+      value={value?.id ?? ''}
+      onChange={(e) => {
+        const selected = items.find(item => String(item.id) === e.target.value);
+        if (selected) onChange(selected);
+      }}
+    >
+      <option value="">Select...</option>
+      {items.map((item) => (
+        <option key={item.id} value={item.id}>
+          {getLabel(item)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Usage
+interface Product {
+  id: number;
+  name: string;
+  price: number;
+}
+
+const products: Product[] = [];
+
+<Select
+  items={products}
+  value={selectedProduct}
+  onChange={setSelectedProduct}  // (item: Product) => void
+  getLabel={(p) => `${p.name} - $${p.price}`}  // p is Product
+/>
+
+// ❌ Error: type without 'id'
+<Select items={[{ name: 'Test' }]} />  // Error: missing 'id'
+```
+
+**Generic Table Component:**
+
+```typescript
+interface Column<T> {
+  key: keyof T | string;
+  header: string;
+  render?: (item: T) => React.ReactNode;
+  width?: string;
+}
+
+interface TableProps<T extends WithId> {
+  data: T[];
+  columns: Column<T>[];
+  onRowClick?: (item: T) => void;
+  isLoading?: boolean;
+}
+
+function Table<T extends WithId>({
+  data,
+  columns,
+  onRowClick,
+  isLoading,
+}: TableProps<T>) {
+  if (isLoading) return <Skeleton />;
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          {columns.map((col) => (
+            <th key={String(col.key)} style={{ width: col.width }}>
+              {col.header}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((item) => (
+          <tr
+            key={item.id}
+            onClick={() => onRowClick?.(item)}
+            style={{ cursor: onRowClick ? 'pointer' : undefined }}
+          >
+            {columns.map((col) => (
+              <td key={String(col.key)}>
+                {col.render
+                  ? col.render(item)
+                  : String(item[col.key as keyof T] ?? '')}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Usage
+<Table
+  data={users}
+  columns={[
+    { key: 'name', header: 'Name' },
+    { key: 'email', header: 'Email' },
+    {
+      key: 'actions',
+      header: '',
+      render: (user) => <button onClick={() => deleteUser(user.id)}>Delete</button>,
+    },
+  ]}
+  onRowClick={(user) => navigate(`/users/${user.id}`)}  // user is User
+/>
+```
+
+**Generic with Default Type:**
+
+```typescript
+// Default to unknown if not specified
+interface FormFieldProps<T = unknown> {
+  value: T;
+  onChange: (value: T) => void;
+  validate?: (value: T) => string | undefined;
+}
+
+function FormField<T = unknown>({ value, onChange, validate }: FormFieldProps<T>) {
+  const error = validate?.(value);
+  // ...
+}
+
+// Without explicit type, T = unknown
+<FormField value={name} onChange={setName} />
+
+// With explicit type
+<FormField<number>
+  value={age}
+  onChange={setAge}
+  validate={(v) => v < 0 ? 'Must be positive' : undefined}
+/>
+```
+
+**Multiple Generics:**
+
+```typescript
+// Transform data from one type to another
+interface TransformListProps<TInput, TOutput> {
+  items: TInput[];
+  transform: (item: TInput) => TOutput;
+  renderItem: (item: TOutput) => React.ReactNode;
+  keyExtractor: (item: TInput) => string;
+}
+
+function TransformList<TInput, TOutput>({
+  items,
+  transform,
+  renderItem,
+  keyExtractor,
+}: TransformListProps<TInput, TOutput>) {
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={keyExtractor(item)}>
+          {renderItem(transform(item))}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Usage
+interface ApiUser {
+  user_id: string;
+  full_name: string;
+}
+
+interface DisplayUser {
+  id: string;
+  name: string;
+}
+
+<TransformList
+  items={apiUsers}
+  transform={(user) => ({ id: user.user_id, name: user.full_name })}
+  renderItem={(user) => <span>{user.name}</span>}  // user is DisplayUser
+  keyExtractor={(user) => user.user_id}  // user is ApiUser
+/>
+```
+
+**Generic with forwardRef:**
+
+```typescript
+// Generic forwardRef is tricky - need type assertion
+interface InputProps<T> {
+  value: T;
+  onChange: (value: T) => void;
+}
+
+// Option 1: Factory function
+function createGenericInput<T>() {
+  return forwardRef<HTMLInputElement, InputProps<T>>(
+    function GenericInput({ value, onChange }, ref) {
+      return (
+        <input
+          ref={ref}
+          value={String(value)}
+          onChange={(e) => onChange(e.target.value as T)}
+        />
+      );
+    }
+  );
+}
+
+const StringInput = createGenericInput<string>();
+const NumberInput = createGenericInput<number>();
+
+// Option 2: Type assertion on component
+interface GenericInputProps<T> extends InputProps<T> {
+  ref?: React.Ref<HTMLInputElement>;
+}
+
+function GenericInput<T>({ value, onChange, ref }: GenericInputProps<T>) {
+  return (
+    <input
+      ref={ref}
+      value={String(value)}
+      onChange={(e) => onChange(e.target.value as T)}
+    />
+  );
+}
+
+// Cast to preserve generic
+const ForwardedInput = forwardRef(GenericInput) as <T>(
+  props: InputProps<T> & { ref?: React.Ref<HTMLInputElement> }
+) => React.ReactElement;
+```
+
+**Generic Hooks:**
+
+```typescript
+// Generic custom hook
+function useLocalStorage<T>(
+  key: string,
+  initialValue: T
+): [T, (value: T | ((prev: T) => T)) => void] {
+  const [storedValue, setStoredValue] = useState<T>(() => {
+    try {
+      const item = localStorage.getItem(key);
+      return item ? (JSON.parse(item) as T) : initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  const setValue = (value: T | ((prev: T) => T)) => {
+    const valueToStore = value instanceof Function ? value(storedValue) : value;
+    setStoredValue(valueToStore);
+    localStorage.setItem(key, JSON.stringify(valueToStore));
+  };
+
+  return [storedValue, setValue];
+}
+
+// Usage - type is inferred
+const [user, setUser] = useLocalStorage('user', { name: '', email: '' });
+// user: { name: string; email: string }
+```
+
+**Senior insight:** Generics make components reusable while keeping type safety. Key patterns: (1) Use constraints (`extends`) to ensure required properties, (2) Provide defaults for common cases, (3) Keep generics simple - if you have 4+ type parameters, consider splitting the component. Generic + forwardRef is awkward in TypeScript - consider exposing ref via a prop or using a factory pattern.
+
+---
+
+### Q: What are advanced conditional types and how do you use them with React?
+
+**Answer:**
+
+Conditional types let you create types that depend on other types, enabling sophisticated type transformations. They're essential for building type-safe utility types and complex component APIs.
+
+**Basic Conditional Types:**
+
+```typescript
+// Syntax: T extends U ? X : Y
+// "If T is assignable to U, the type is X, otherwise Y"
+
+type IsString<T> = T extends string ? true : false;
+
+type A = IsString<'hello'>;  // true
+type B = IsString<42>;       // false
+
+// With never for filtering
+type NonNullable<T> = T extends null | undefined ? never : T;
+
+type C = NonNullable<string | null>;  // string
+```
+
+**Extracting Types with `infer`:**
+
+```typescript
+// infer declares a type variable within the conditional
+type GetReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+
+type D = GetReturnType<() => string>;  // string
+type E = GetReturnType<(x: number) => boolean>;  // boolean
+
+// Extract props type from a component
+type GetProps<T> = T extends React.ComponentType<infer P> ? P : never;
+
+type ButtonProps = GetProps<typeof Button>;  // { onClick: () => void; ... }
+
+// Extract array element type
+type ArrayElement<T> = T extends (infer E)[] ? E : never;
+
+type F = ArrayElement<string[]>;  // string
+type G = ArrayElement<User[]>;    // User
+```
+
+**React-Specific Conditional Types:**
+
+```typescript
+// Extract ref type from a component
+type GetRefType<T> = T extends React.ForwardRefExoticComponent<
+  React.RefAttributes<infer R>
+>
+  ? R
+  : T extends React.ComponentType<{ ref?: React.Ref<infer R> }>
+  ? R
+  : never;
+
+type InputRef = GetRefType<typeof MyInput>;  // HTMLInputElement
+
+// Extract children type
+type ChildrenType<T> = T extends { children: infer C } ? C : never;
+
+// Conditionally require props
+type RequireIfTrue<T, K extends keyof T, Condition extends boolean> =
+  Condition extends true
+    ? T & Required<Pick<T, K>>
+    : T & Partial<Pick<T, K>>;
+
+interface BaseFormProps {
+  onSubmit: () => void;
+  validationSchema?: object;
+  validateOnChange?: boolean;
+}
+
+// If validateOnChange is true, validationSchema is required
+type FormProps<ValidateOnChange extends boolean = false> =
+  RequireIfTrue<BaseFormProps, 'validationSchema', ValidateOnChange>;
+
+// Usage
+const propsA: FormProps<false> = { onSubmit: () => {} };  // ✅ schema optional
+const propsB: FormProps<true> = { onSubmit: () => {} };   // ❌ Error: missing validationSchema
+const propsC: FormProps<true> = { onSubmit: () => {}, validationSchema: {} };  // ✅
+```
+
+**Mapped Conditional Types:**
+
+```typescript
+// Transform all properties conditionally
+type OptionalIfFunction<T> = {
+  [K in keyof T]: T[K] extends (...args: any[]) => any
+    ? T[K] | undefined
+    : T[K];
+};
+
+interface ButtonProps {
+  label: string;
+  onClick: () => void;
+  onHover: () => void;
+}
+
+type RelaxedButtonProps = OptionalIfFunction<ButtonProps>;
+// { label: string; onClick?: () => void; onHover?: () => void; }
+
+// Make certain keys required based on condition
+type RequireKeys<T, K extends keyof T> = Omit<T, K> & Required<Pick<T, K>>;
+
+type ControlledInputProps = RequireKeys<InputProps, 'value' | 'onChange'>;
+```
+
+**Conditional Props Pattern:**
+
+```typescript
+// Props that depend on each other
+type ConditionalProps<TControlled extends boolean> = TControlled extends true
+  ? {
+      controlled: true;
+      value: string;
+      onChange: (value: string) => void;
+      defaultValue?: never;  // Disallow
+    }
+  : {
+      controlled?: false;
+      value?: never;  // Disallow
+      onChange?: (value: string) => void;
+      defaultValue?: string;
+    };
+
+type InputProps<TControlled extends boolean = false> = {
+  label: string;
+  placeholder?: string;
+} & ConditionalProps<TControlled>;
+
+function Input<TControlled extends boolean = false>(
+  props: InputProps<TControlled>
+) {
+  if (props.controlled) {
+    // TypeScript knows: value and onChange exist
+    return <input value={props.value} onChange={(e) => props.onChange(e.target.value)} />;
+  }
+  // TypeScript knows: defaultValue might exist
+  return <input defaultValue={props.defaultValue} />;
+}
+
+// Usage
+<Input label="Name" defaultValue="John" />           // ✅ Uncontrolled
+<Input label="Name" controlled value={v} onChange={setV} />  // ✅ Controlled
+<Input label="Name" controlled defaultValue="John" />  // ❌ Error: can't mix
+<Input label="Name" value={v} />                      // ❌ Error: need controlled=true
+```
+
+**Distributive Conditional Types:**
+
+```typescript
+// Conditional types distribute over unions automatically
+type Wrapped<T> = T extends any ? { value: T } : never;
+
+type Distributed = Wrapped<string | number>;
+// Result: { value: string } | { value: number }
+
+// Prevent distribution with [T] extends [any]
+type NonDistributed<T> = [T] extends [any] ? { value: T } : never;
+
+type NotDistributed = NonDistributed<string | number>;
+// Result: { value: string | number }
+
+// Useful for filtering union members
+type FilterByType<T, U> = T extends U ? T : never;
+
+type OnlyStrings = FilterByType<string | number | boolean, string>;  // string
+type OnlyFunctions = FilterByType<string | (() => void) | number, Function>;  // () => void
+```
+
+**Template Literal Conditional Types:**
+
+```typescript
+// Extract parts of string literal types
+type ExtractRoute<T extends string> =
+  T extends `/${infer Segment}/${infer Rest}`
+    ? Segment | ExtractRoute<`/${Rest}`>
+    : T extends `/${infer Segment}`
+    ? Segment
+    : never;
+
+type RouteSegments = ExtractRoute<'/users/123/posts'>;
+// Result: 'users' | '123' | 'posts'
+
+// Build route params type
+type ExtractParams<T extends string> =
+  T extends `${string}:${infer Param}/${infer Rest}`
+    ? Param | ExtractParams<Rest>
+    : T extends `${string}:${infer Param}`
+    ? Param
+    : never;
+
+type Params = ExtractParams<'/users/:userId/posts/:postId'>;
+// Result: 'userId' | 'postId'
+
+// Full route params type
+type RouteParams<T extends string> = {
+  [K in ExtractParams<T>]: string;
+};
+
+type UserPostParams = RouteParams<'/users/:userId/posts/:postId'>;
+// Result: { userId: string; postId: string }
+```
+
+**Complex Component Prop Types:**
+
+```typescript
+// Component that changes props based on 'mode'
+type Mode = 'view' | 'edit' | 'create';
+
+type BaseProps = {
+  title: string;
+};
+
+type ModeSpecificProps<M extends Mode> =
+  M extends 'view'
+    ? { data: User; onEdit?: () => void }
+    : M extends 'edit'
+    ? { data: User; onSave: (user: User) => void; onCancel: () => void }
+    : M extends 'create'
+    ? { onSave: (user: Omit<User, 'id'>) => void; onCancel: () => void }
+    : never;
+
+type UserFormProps<M extends Mode> = BaseProps & { mode: M } & ModeSpecificProps<M>;
+
+function UserForm<M extends Mode>(props: UserFormProps<M>) {
+  // Implementation based on mode
+  if (props.mode === 'view') {
+    // TypeScript knows: props.data exists
+    return <div>{props.data.name}</div>;
+  }
+  // ... etc
+}
+
+// Usage
+<UserForm mode="view" title="User" data={user} />
+<UserForm mode="edit" title="Edit" data={user} onSave={save} onCancel={cancel} />
+<UserForm mode="create" title="New" onSave={create} onCancel={cancel} />
+
+// ❌ Error: missing onSave for edit mode
+<UserForm mode="edit" title="Edit" data={user} />
+```
+
+**Senior insight:** Conditional types are powerful but can hurt readability. Use them for: (1) Library/utility types that need flexibility, (2) Enforcing prop relationships, (3) Type transformations. Avoid deep nesting - if your conditional type is 4+ levels deep, consider simplifying or using discriminated unions instead. The `infer` keyword is key for extracting types - master it for advanced patterns.
+
+---
+
+### Q: How do you create type-safe event handlers in React?
+
+**Answer:**
+
+React has a comprehensive type system for events. Understanding it helps you write type-safe handlers and avoid common type errors.
+
+**React Event Types Hierarchy:**
+
+```typescript
+// Base type - all events extend this
+React.SyntheticEvent<T = Element, E = Event>
+
+// Specific event types
+React.MouseEvent<T = Element>        // click, mouseenter, etc.
+React.KeyboardEvent<T = Element>     // keydown, keyup, etc.
+React.ChangeEvent<T = Element>       // input change
+React.FormEvent<T = Element>         // form submit
+React.FocusEvent<T = Element>        // focus, blur
+React.DragEvent<T = Element>         // drag and drop
+React.TouchEvent<T = Element>        // touch events
+React.WheelEvent<T = Element>        // scroll wheel
+React.AnimationEvent<T = Element>    // CSS animations
+React.TransitionEvent<T = Element>   // CSS transitions
+React.ClipboardEvent<T = Element>    // copy, cut, paste
+React.PointerEvent<T = Element>      // unified pointer events
+```
+
+**Basic Event Handler Typing:**
+
+```typescript
+// Inline handlers - type is inferred
+<button onClick={(e) => {
+  e.preventDefault();  // ✅ e is MouseEvent<HTMLButtonElement>
+  console.log(e.currentTarget.textContent);
+}}>
+  Click
+</button>
+
+// Separate handler function
+const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+  console.log(e.currentTarget.disabled);  // ✅ knows it's a button
+};
+
+<button onClick={handleClick}>Click</button>
+
+// Using event handler type
+const handleClick: React.MouseEventHandler<HTMLButtonElement> = (e) => {
+  // e is automatically typed
+};
+```
+
+**currentTarget vs target:**
+
+```typescript
+// currentTarget - element the handler is attached to (correctly typed)
+// target - element that triggered the event (typed as EventTarget)
+
+function handleClick(e: React.MouseEvent<HTMLDivElement>) {
+  // currentTarget is always the div we attached onClick to
+  e.currentTarget.style.background = 'red';  // ✅ HTMLDivElement
+
+  // target could be any element inside the div that was clicked
+  e.target;  // EventTarget - very generic
+
+  // Type guard to narrow target
+  if (e.target instanceof HTMLButtonElement) {
+    e.target.disabled = true;  // ✅ now knows it's a button
+  }
+}
+
+// Common pattern: assert target type
+function handleClick(e: React.MouseEvent<HTMLDivElement>) {
+  const target = e.target as HTMLElement;  // Safe for most cases
+  console.log(target.tagName);
+}
+```
+
+**Form and Input Events:**
+
+```typescript
+// Input change event
+function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  const value = e.target.value;  // string
+  const name = e.target.name;    // string
+  const checked = e.target.checked;  // boolean (for checkboxes)
+}
+
+// Select change event
+function handleSelectChange(e: React.ChangeEvent<HTMLSelectElement>) {
+  const value = e.target.value;
+  const selectedIndex = e.target.selectedIndex;
+  const selectedOption = e.target.options[selectedIndex];
+}
+
+// Textarea change event
+function handleTextarea(e: React.ChangeEvent<HTMLTextAreaElement>) {
+  const value = e.target.value;
+  const rows = e.target.rows;
+}
+
+// Form submit event
+function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  e.preventDefault();
+
+  // Access form data
+  const formData = new FormData(e.currentTarget);
+  const name = formData.get('name');  // FormDataEntryValue | null
+
+  // Type-safe form access
+  const form = e.currentTarget;
+  const nameInput = form.elements.namedItem('name') as HTMLInputElement;
+  const nameValue = nameInput.value;  // string
+}
+```
+
+**Generic Event Handler:**
+
+```typescript
+// Handler that works with multiple input types
+function createChangeHandler<T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+  setter: (value: string) => void
+) {
+  return (e: React.ChangeEvent<T>) => {
+    setter(e.target.value);
+  };
+}
+
+// Usage
+const handleNameChange = createChangeHandler<HTMLInputElement>(setName);
+const handleCountryChange = createChangeHandler<HTMLSelectElement>(setCountry);
+
+// Typed form handler factory
+function createFormHandler<TFormData>(
+  onSubmit: (data: TFormData) => void
+) {
+  return (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const data = Object.fromEntries(formData) as TFormData;
+    onSubmit(data);
+  };
+}
+
+interface LoginForm {
+  email: string;
+  password: string;
+}
+
+const handleLogin = createFormHandler<LoginForm>((data) => {
+  console.log(data.email, data.password);  // both typed as string
+});
+```
+
+**Keyboard Event Patterns:**
+
+```typescript
+function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  // Key identification
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitForm();
+  }
+
+  if (e.key === 'Escape') {
+    closeModal();
+  }
+
+  // Modifier keys
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    save();
+  }
+
+  // Deprecated: e.keyCode, e.charCode - use e.key instead
+}
+
+// Type-safe key handler map
+type KeyHandler = (e: React.KeyboardEvent) => void;
+type KeyMap = Partial<Record<string, KeyHandler>>;
+
+function useKeyboardHandlers(keyMap: KeyMap) {
+  return (e: React.KeyboardEvent) => {
+    const handler = keyMap[e.key];
+    if (handler) {
+      e.preventDefault();
+      handler(e);
+    }
+  };
+}
+
+// Usage
+const handleKeyDown = useKeyboardHandlers({
+  Enter: () => submit(),
+  Escape: () => cancel(),
+  ArrowDown: () => selectNext(),
+  ArrowUp: () => selectPrev(),
+});
+```
+
+**Custom Event Types:**
+
+```typescript
+// When you need to pass additional data
+interface CustomButtonEvent extends React.MouseEvent<HTMLButtonElement> {
+  // Can't actually extend, but can create wrapper type
+}
+
+// Better: Create a handler type with extra params
+type ButtonClickHandler = (
+  e: React.MouseEvent<HTMLButtonElement>,
+  data: { id: string; action: string }
+) => void;
+
+interface ActionButtonProps {
+  id: string;
+  action: string;
+  onClick: ButtonClickHandler;
+}
+
+function ActionButton({ id, action, onClick }: ActionButtonProps) {
+  return (
+    <button onClick={(e) => onClick(e, { id, action })}>
+      {action}
+    </button>
+  );
+}
+
+// Usage
+<ActionButton
+  id="123"
+  action="delete"
+  onClick={(e, data) => {
+    console.log(data.id, data.action);  // Fully typed
+  }}
+/>
+```
+
+**Event Handler Component Props:**
+
+```typescript
+// Component that accepts standard event handlers
+interface InputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  'onChange' | 'value'
+> {
+  // Override with custom types
+  value: string;
+  onChange: (value: string) => void;  // Simplified from ChangeEvent
+  onClear?: () => void;
+}
+
+function Input({ value, onChange, onClear, ...props }: InputProps) {
+  return (
+    <div>
+      <input
+        {...props}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}  // Wrap native event
+      />
+      {onClear && <button onClick={onClear}>×</button>}
+    </div>
+  );
+}
+
+// Standard event handler types as props
+interface ComponentProps {
+  onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
+  onSubmit?: React.FormEventHandler<HTMLFormElement>;
+  onChange?: React.ChangeEventHandler<HTMLInputElement>;
+}
+```
+
+**Debounced Event Handlers:**
+
+```typescript
+// Type-safe debounced handler
+function useDebouncedCallback<T extends (...args: any[]) => void>(
+  callback: T,
+  delay: number
+): T {
+  const timeoutRef = useRef<NodeJS.Timeout>();
+
+  return useCallback(
+    ((...args: Parameters<T>) => {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => callback(...args), delay);
+    }) as T,
+    [callback, delay]
+  );
+}
+
+// Usage
+const handleSearch = useDebouncedCallback(
+  (e: React.ChangeEvent<HTMLInputElement>) => {
+    search(e.target.value);
+  },
+  300
+);
+
+<input onChange={handleSearch} />
+```
+
+**Senior insight:** The key to mastering React event types is understanding `currentTarget` (always matches the generic parameter) vs `target` (needs type guards). Use `React.MouseEventHandler<T>` et al. when declaring handler props for cleaner signatures. For forms, `FormData` with `Object.fromEntries()` is type-safe with assertion. When wrapping native elements, use `Omit<React.InputHTMLAttributes<...>, 'overriddenProps'>` to inherit all standard props while customizing specific ones.
+
+---

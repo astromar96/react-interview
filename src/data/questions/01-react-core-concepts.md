@@ -461,3 +461,623 @@ function useAsyncError() {
 **Senior insight:** Use multiple granular error boundaries to isolate failures. A single error in a widget shouldn't crash the entire app. Libraries like `react-error-boundary` provide a more feature-rich implementation with reset capabilities.
 
 ---
+
+### Q: Explain React Fiber's work loop and priority lanes in depth
+
+**Answer:**
+
+React Fiber's work loop is the mechanism that schedules and executes rendering work. Understanding it helps debug performance issues and explains why React 18's concurrent features work the way they do.
+
+**The Two Trees:**
+
+```
+Current Tree (displayed)    Work-In-Progress Tree (being built)
+        ↓                              ↓
+   FiberRoot                      FiberRoot
+       |                              |
+     App                            App'
+    /   \                          /   \
+  Nav   Main         ←→         Nav'   Main'
+        /   \        (reconciled)        /   \
+    Header Content               Header' Content'
+```
+
+React maintains two fiber trees:
+- **Current Tree**: What's currently rendered on screen
+- **Work-In-Progress (WIP) Tree**: The tree being built during reconciliation
+
+When reconciliation completes, React swaps the pointers (double buffering).
+
+**Fiber Node Structure:**
+
+```typescript
+interface Fiber {
+  // Identity
+  type: ComponentType | string;  // Function/class component or DOM tag
+  key: string | null;
+
+  // Tree structure (linked list, not array)
+  return: Fiber | null;         // Parent fiber
+  child: Fiber | null;          // First child
+  sibling: Fiber | null;        // Next sibling
+
+  // State
+  memoizedState: any;           // Hook state (linked list for hooks)
+  memoizedProps: any;           // Props from last render
+
+  // Effects
+  flags: Flags;                 // What work needs to be done
+  subtreeFlags: Flags;          // What work children need
+
+  // Priority
+  lanes: Lanes;                 // Update priority (bit field)
+  childLanes: Lanes;            // Priority of children's work
+
+  // Double buffering
+  alternate: Fiber | null;      // Points to other tree's version
+}
+```
+
+**The Work Loop:**
+
+```typescript
+// Simplified work loop (conceptual)
+function workLoop() {
+  while (workInProgress !== null && !shouldYield()) {
+    performUnitOfWork(workInProgress);
+  }
+}
+
+function performUnitOfWork(fiber: Fiber) {
+  // 1. Begin work - process this fiber
+  const next = beginWork(fiber);
+
+  if (next !== null) {
+    // Has children - go deeper
+    workInProgress = next;
+  } else {
+    // No children - complete this fiber
+    completeUnitOfWork(fiber);
+  }
+}
+
+function completeUnitOfWork(fiber: Fiber) {
+  while (fiber !== null) {
+    // 2. Complete work - create/update DOM node
+    completeWork(fiber);
+
+    if (fiber.sibling !== null) {
+      // Has sibling - process sibling next
+      workInProgress = fiber.sibling;
+      return;
+    }
+
+    // No sibling - go back up to parent
+    fiber = fiber.return;
+  }
+
+  // Reached root - work is complete
+  workInProgress = null;
+}
+```
+
+**Traversal Order (DFS):**
+
+```
+       App
+      /   \
+   Nav    Main
+   /      /   \
+ Logo  Header Content
+
+Traversal: App → Nav → Logo → (complete) → (complete Nav)
+         → Main → Header → (complete) → Content → (complete)
+         → (complete Main) → (complete App)
+```
+
+**Priority Lanes (React 18):**
+
+```typescript
+// Lanes are bit fields for priority (simplified)
+const SyncLane           = 0b0000000000000000000000000000001;  // Highest
+const InputContinuousLane = 0b0000000000000000000000000000100;
+const DefaultLane        = 0b0000000000000000000000000010000;
+const TransitionLane     = 0b0000000000000000000001000000000;
+const IdleLane           = 0b0100000000000000000000000000000;  // Lowest
+
+// Multiple lanes can be scheduled together
+const BatchedLanes = InputContinuousLane | DefaultLane;
+
+// Lane priority determines which updates process first
+function getHighestPriorityLane(lanes: Lanes): Lane {
+  return lanes & -lanes; // Bit trick: isolate rightmost set bit
+}
+```
+
+**How Transitions Work:**
+
+```typescript
+// When you use startTransition
+function startTransition(callback) {
+  // 1. Set transition context
+  ReactCurrentBatchConfig.transition = {};
+
+  // 2. Run callback - state updates get TransitionLane priority
+  callback();
+
+  // 3. Clear transition context
+  ReactCurrentBatchConfig.transition = null;
+}
+
+// Inside a transition
+function handleClick() {
+  startTransition(() => {
+    // This update gets TransitionLane (low priority)
+    setSearchResults(results);
+  });
+
+  // This update gets SyncLane (high priority)
+  setInputValue(value);
+}
+```
+
+**Interruptible Rendering:**
+
+```typescript
+// shouldYield checks if we should pause
+function shouldYield(): boolean {
+  const currentTime = performance.now();
+  // Yield every 5ms to keep frame rate smooth
+  return currentTime >= deadline;
+}
+
+// Work loop with interruption
+function workLoopConcurrent() {
+  while (workInProgress !== null && !shouldYield()) {
+    performUnitOfWork(workInProgress);
+  }
+
+  if (workInProgress !== null) {
+    // More work to do - schedule continuation
+    scheduleCallback(performConcurrentWorkOnRoot);
+  }
+}
+```
+
+**Effect Lists (Pre-React 18):**
+
+```
+Before React 18, effects were collected in a linked list:
+
+fiber1 (Placement) → fiber2 (Update) → fiber3 (Deletion)
+      ↓                    ↓                   ↓
+  appendChild          setAttribute        removeChild
+```
+
+**Subtree Flags (React 18+):**
+
+```typescript
+// Now effects are tracked via subtreeFlags
+function bubbleProperties(fiber: Fiber) {
+  let subtreeFlags = NoFlags;
+  let child = fiber.child;
+
+  while (child !== null) {
+    subtreeFlags |= child.subtreeFlags;
+    subtreeFlags |= child.flags;
+    child = child.sibling;
+  }
+
+  fiber.subtreeFlags = subtreeFlags;
+}
+
+// During commit, only traverse subtrees with flags
+function commitMutationEffects(fiber: Fiber) {
+  if (fiber.subtreeFlags & MutationMask) {
+    // Children have mutations - traverse down
+    let child = fiber.child;
+    while (child !== null) {
+      commitMutationEffects(child);
+      child = child.sibling;
+    }
+  }
+
+  if (fiber.flags & MutationMask) {
+    // This fiber has mutations - apply them
+    commitWork(fiber);
+  }
+}
+```
+
+**Debug Tools:**
+
+```jsx
+// React DevTools Profiler shows:
+// - Commit duration (how long commit phase took)
+// - Render duration (how long render phase took)
+// - Which components rendered and why
+
+// Programmatic profiling
+<Profiler id="MyComponent" onRender={(
+  id,
+  phase,           // "mount" | "update"
+  actualDuration,  // Time spent rendering
+  baseDuration,    // Time without memoization
+  startTime,
+  commitTime
+) => {
+  console.log(`${id} ${phase}: ${actualDuration}ms`);
+}}>
+  <MyComponent />
+</Profiler>
+```
+
+**Senior insight:** Understanding the work loop explains React's performance characteristics: why component order matters, why effects run in a specific order, and why state updates batch together. The lane system is why `useTransition` can keep the UI responsive—it literally assigns lower priority bits to those updates. When debugging render performance, think in terms of fibers: each fiber is a unit of work that can be measured, profiled, and optimized independently.
+
+---
+
+### Q: How do you implement advanced Suspense patterns for data fetching and streaming SSR?
+
+**Answer:**
+
+Suspense is React's mechanism for declaratively handling async operations. While initially focused on code-splitting, it now powers data fetching and streaming SSR in React 18+.
+
+**Suspense Mental Model:**
+
+```jsx
+// Suspense catches "promises" thrown by children
+// When a promise is thrown:
+// 1. React shows the fallback
+// 2. When promise resolves, React re-renders the subtree
+// 3. This time, the component returns real content
+
+<Suspense fallback={<Loading />}>
+  <AsyncComponent />  {/* Throws a promise when loading */}
+</Suspense>
+```
+
+**Building a Suspense-Compatible Data Source:**
+
+```typescript
+// The "throw a promise" pattern
+interface Resource<T> {
+  read(): T;
+}
+
+function createResource<T>(promise: Promise<T>): Resource<T> {
+  let status: 'pending' | 'success' | 'error' = 'pending';
+  let result: T;
+  let error: Error;
+
+  const suspender = promise.then(
+    (data) => {
+      status = 'success';
+      result = data;
+    },
+    (err) => {
+      status = 'error';
+      error = err;
+    }
+  );
+
+  return {
+    read() {
+      switch (status) {
+        case 'pending':
+          throw suspender;  // Suspense catches this
+        case 'error':
+          throw error;      // Error boundary catches this
+        case 'success':
+          return result;
+      }
+    },
+  };
+}
+
+// Usage
+const userResource = createResource(fetchUser(userId));
+
+function UserProfile() {
+  const user = userResource.read(); // Suspends until ready
+  return <h1>{user.name}</h1>;
+}
+
+<Suspense fallback={<Skeleton />}>
+  <UserProfile />
+</Suspense>
+```
+
+**React Query / TanStack Query with Suspense:**
+
+```tsx
+// Modern approach: use a library that supports Suspense
+
+import { useSuspenseQuery } from '@tanstack/react-query';
+
+function UserProfile({ userId }: { userId: string }) {
+  // This hook suspends automatically
+  const { data: user } = useSuspenseQuery({
+    queryKey: ['user', userId],
+    queryFn: () => fetchUser(userId),
+  });
+
+  // data is guaranteed to exist here (no loading check needed)
+  return (
+    <div>
+      <h1>{user.name}</h1>
+      <p>{user.email}</p>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <Suspense fallback={<UserSkeleton />}>
+      <UserProfile userId="123" />
+    </Suspense>
+  );
+}
+```
+
+**Nested Suspense Boundaries:**
+
+```tsx
+// Fine-grained loading states with nested boundaries
+
+function Dashboard() {
+  return (
+    <div className="dashboard">
+      {/* Header loads independently */}
+      <Suspense fallback={<HeaderSkeleton />}>
+        <Header />
+      </Suspense>
+
+      <div className="content">
+        {/* Sidebar loads independently */}
+        <Suspense fallback={<SidebarSkeleton />}>
+          <Sidebar />
+        </Suspense>
+
+        {/* Main content loads independently */}
+        <Suspense fallback={<MainContentSkeleton />}>
+          <MainContent />
+
+          {/* Nested: widgets load after main content */}
+          <Suspense fallback={<WidgetsSkeleton />}>
+            <Widgets />
+          </Suspense>
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+```
+
+**SuspenseList for Coordinated Loading:**
+
+```tsx
+// Control reveal order of multiple Suspense boundaries
+import { SuspenseList } from 'react';
+
+function Feed() {
+  return (
+    <SuspenseList revealOrder="forwards" tail="collapsed">
+      {/* Posts reveal in order, even if later ones load first */}
+      {posts.map(post => (
+        <Suspense key={post.id} fallback={<PostSkeleton />}>
+          <Post id={post.id} />
+        </Suspense>
+      ))}
+    </SuspenseList>
+  );
+}
+
+// revealOrder options:
+// - "forwards": reveal in order (top to bottom)
+// - "backwards": reveal in reverse order
+// - "together": reveal all at once when all ready
+
+// tail options:
+// - "collapsed": show only one fallback at a time
+// - "hidden": show no fallbacks for unrevealed items
+```
+
+**Suspense with useTransition (Avoid Unwanted Fallbacks):**
+
+```tsx
+function SearchResults() {
+  const [query, setQuery] = useState('');
+  const [isPending, startTransition] = useTransition();
+
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+
+    // Immediate update (high priority)
+    setQuery(value);
+
+    // Deferred update (low priority)
+    startTransition(() => {
+      // This won't trigger Suspense fallback
+      // Instead, isPending becomes true
+    });
+  };
+
+  return (
+    <div>
+      <input value={query} onChange={handleChange} />
+
+      {/* Show stale content with pending indicator instead of fallback */}
+      <div style={{ opacity: isPending ? 0.7 : 1 }}>
+        <Suspense fallback={<ResultsSkeleton />}>
+          <Results query={query} />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+```
+
+**Streaming SSR with Suspense:**
+
+```tsx
+// Server component (Next.js App Router or similar)
+
+// app/page.tsx
+export default function Page() {
+  return (
+    <html>
+      <body>
+        <header>
+          <nav>Always rendered immediately</nav>
+        </header>
+
+        {/* This streams in when ready */}
+        <Suspense fallback={<MainSkeleton />}>
+          <MainContent />
+        </Suspense>
+
+        {/* This can stream independently */}
+        <Suspense fallback={<SidebarSkeleton />}>
+          <Sidebar />
+        </Suspense>
+      </body>
+    </html>
+  );
+}
+
+// React Server Component that fetches data
+async function MainContent() {
+  const data = await fetchMainContent(); // Server-side fetch
+
+  return (
+    <main>
+      <h1>{data.title}</h1>
+      <p>{data.content}</p>
+    </main>
+  );
+}
+```
+
+**How Streaming Works:**
+
+```html
+<!-- Initial HTML sent immediately -->
+<html>
+  <body>
+    <header><nav>...</nav></header>
+
+    <!-- Placeholder with fallback -->
+    <template id="B:0"></template>
+    <div>Loading main content...</div>
+    <!--/$-->
+
+    <template id="B:1"></template>
+    <div>Loading sidebar...</div>
+    <!--/$-->
+
+    <!-- React runtime to handle streaming -->
+    <script src="/_next/static/chunks/main.js"></script>
+  </body>
+</html>
+
+<!-- Streamed later when MainContent resolves -->
+<script>
+  $RC = function(b, c) {
+    // Replaces template B:0 with actual content
+  };
+  $RC("B:0", "<main><h1>Title</h1><p>Content</p></main>");
+</script>
+
+<!-- Streamed even later when Sidebar resolves -->
+<script>
+  $RC("B:1", "<aside>Sidebar content</aside>");
+</script>
+```
+
+**Error Handling with Suspense:**
+
+```tsx
+// Combine Suspense with Error Boundaries
+
+function DataComponent() {
+  return (
+    <ErrorBoundary fallback={<ErrorMessage />}>
+      <Suspense fallback={<Loading />}>
+        <DataFetcher />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+// With react-error-boundary library
+import { ErrorBoundary } from 'react-error-boundary';
+
+function App() {
+  return (
+    <ErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onReset={() => {
+        // Reset any state that caused the error
+        queryClient.clear();
+      }}
+    >
+      <Suspense fallback={<GlobalLoading />}>
+        <Routes />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function ErrorFallback({ error, resetErrorBoundary }) {
+  return (
+    <div role="alert">
+      <p>Something went wrong:</p>
+      <pre>{error.message}</pre>
+      <button onClick={resetErrorBoundary}>Try again</button>
+    </div>
+  );
+}
+```
+
+**Preloading Data:**
+
+```tsx
+// Preload data before Suspense boundary is rendered
+
+import { preload } from 'react-dom';
+
+// Preload on hover
+function ProductLink({ productId }) {
+  const handleMouseEnter = () => {
+    // Start fetching before navigation
+    preloadProduct(productId);
+  };
+
+  return (
+    <Link
+      to={`/products/${productId}`}
+      onMouseEnter={handleMouseEnter}
+    >
+      View Product
+    </Link>
+  );
+}
+
+// In React Query
+function preloadProduct(id: string) {
+  queryClient.prefetchQuery({
+    queryKey: ['product', id],
+    queryFn: () => fetchProduct(id),
+  });
+}
+```
+
+**Suspense Boundaries Strategy:**
+
+| Granularity | Pros | Cons |
+|-------------|------|------|
+| Page-level | Simple, fewer boundaries | All-or-nothing loading |
+| Section-level | Independent loading | More complexity |
+| Component-level | Maximum parallelism | Many loading states |
+
+**Senior insight:** Suspense inverts the loading state paradigm—instead of components managing their own loading states, they simply declare what data they need, and boundaries handle the rest. For SSR, Suspense enables streaming, which dramatically improves Time to First Byte by sending HTML as it's ready. The key architectural decision is boundary placement: too few boundaries mean users wait longer; too many create a "popcorn" loading experience. Use useTransition to prevent Suspense fallbacks during navigation—users prefer stale content with a loading indicator over a full skeleton.

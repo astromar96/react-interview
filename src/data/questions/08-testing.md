@@ -868,3 +868,1264 @@ For a typical React app:
 
 ---
 
+### Q: How do you set up and use Mock Service Worker (MSW) for React testing?
+
+**Answer:**
+
+MSW (Mock Service Worker) intercepts network requests at the service worker level, providing realistic API mocking without changing application code. It's the modern standard for API mocking in React testing.
+
+**MSW 2.0 Setup:**
+
+```typescript
+// src/mocks/handlers.ts
+import { http, HttpResponse } from 'msw';
+
+export const handlers = [
+  // GET request
+  http.get('/api/users', () => {
+    return HttpResponse.json([
+      { id: 1, name: 'John Doe', email: 'john@example.com' },
+      { id: 2, name: 'Jane Smith', email: 'jane@example.com' },
+    ]);
+  }),
+
+  // GET with params
+  http.get('/api/users/:id', ({ params }) => {
+    const { id } = params;
+    return HttpResponse.json({
+      id: Number(id),
+      name: 'John Doe',
+      email: 'john@example.com',
+    });
+  }),
+
+  // POST request
+  http.post('/api/users', async ({ request }) => {
+    const body = await request.json();
+    return HttpResponse.json(
+      { id: 3, ...body },
+      { status: 201 }
+    );
+  }),
+
+  // Error response
+  http.delete('/api/users/:id', ({ params }) => {
+    if (params.id === '999') {
+      return HttpResponse.json(
+        { error: 'User not found' },
+        { status: 404 }
+      );
+    }
+    return HttpResponse.json({ success: true });
+  }),
+];
+```
+
+```typescript
+// src/mocks/server.ts (for Node/Jest)
+import { setupServer } from 'msw/node';
+import { handlers } from './handlers';
+
+export const server = setupServer(...handlers);
+```
+
+```typescript
+// src/mocks/browser.ts (for browser/Storybook)
+import { setupWorker } from 'msw/browser';
+import { handlers } from './handlers';
+
+export const worker = setupWorker(...handlers);
+```
+
+**Test Setup:**
+
+```typescript
+// setupTests.ts or jest.setup.ts
+import { server } from './mocks/server';
+
+// Start server before all tests
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+
+// Reset handlers after each test (removes runtime overrides)
+afterEach(() => server.resetHandlers());
+
+// Clean up after all tests
+afterAll(() => server.close());
+```
+
+**Using MSW in Tests:**
+
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { server } from './mocks/server';
+import UserList from './UserList';
+
+test('displays users from API', async () => {
+  render(<UserList />);
+
+  // Wait for data to load
+  expect(await screen.findByText('John Doe')).toBeInTheDocument();
+  expect(screen.getByText('Jane Smith')).toBeInTheDocument();
+});
+
+test('handles API errors gracefully', async () => {
+  // Override handler for this specific test
+  server.use(
+    http.get('/api/users', () => {
+      return HttpResponse.json(
+        { error: 'Internal Server Error' },
+        { status: 500 }
+      );
+    })
+  );
+
+  render(<UserList />);
+
+  await waitFor(() => {
+    expect(screen.getByText('Failed to load users')).toBeInTheDocument();
+  });
+});
+
+test('shows loading state while fetching', async () => {
+  // Delay response to test loading state
+  server.use(
+    http.get('/api/users', async () => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return HttpResponse.json([{ id: 1, name: 'John' }]);
+    })
+  );
+
+  render(<UserList />);
+
+  // Loading state should be visible initially
+  expect(screen.getByText('Loading...')).toBeInTheDocument();
+
+  // Then data appears
+  expect(await screen.findByText('John')).toBeInTheDocument();
+});
+```
+
+**Testing Different HTTP Methods:**
+
+```typescript
+test('creates new user via POST', async () => {
+  const user = userEvent.setup();
+  const onUserCreated = jest.fn();
+
+  // Track what was sent to the API
+  let capturedBody: any;
+  server.use(
+    http.post('/api/users', async ({ request }) => {
+      capturedBody = await request.json();
+      return HttpResponse.json(
+        { id: 99, ...capturedBody },
+        { status: 201 }
+      );
+    })
+  );
+
+  render(<CreateUserForm onSuccess={onUserCreated} />);
+
+  await user.type(screen.getByLabelText('Name'), 'New User');
+  await user.type(screen.getByLabelText('Email'), 'new@example.com');
+  await user.click(screen.getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(onUserCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 99, name: 'New User' })
+    );
+  });
+
+  // Verify request body
+  expect(capturedBody).toEqual({
+    name: 'New User',
+    email: 'new@example.com',
+  });
+});
+```
+
+**Testing Query Parameters:**
+
+```typescript
+test('filters users by role', async () => {
+  let capturedUrl: URL;
+
+  server.use(
+    http.get('/api/users', ({ request }) => {
+      capturedUrl = new URL(request.url);
+      const role = capturedUrl.searchParams.get('role');
+
+      if (role === 'admin') {
+        return HttpResponse.json([{ id: 1, name: 'Admin User', role: 'admin' }]);
+      }
+      return HttpResponse.json([]);
+    })
+  );
+
+  render(<UserList filter="admin" />);
+
+  await waitFor(() => {
+    expect(screen.getByText('Admin User')).toBeInTheDocument();
+  });
+
+  expect(capturedUrl!.searchParams.get('role')).toBe('admin');
+});
+```
+
+**Network Conditions Simulation:**
+
+```typescript
+test('handles network timeout', async () => {
+  server.use(
+    http.get('/api/users', async () => {
+      // Simulate network timeout
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      return HttpResponse.json([]);
+    })
+  );
+
+  render(<UserList timeout={1000} />);
+
+  await waitFor(() => {
+    expect(screen.getByText('Request timed out')).toBeInTheDocument();
+  }, { timeout: 2000 });
+});
+
+test('handles network failure', async () => {
+  server.use(
+    http.get('/api/users', () => {
+      return HttpResponse.error(); // Simulates network error
+    })
+  );
+
+  render(<UserList />);
+
+  await waitFor(() => {
+    expect(screen.getByText('Network error')).toBeInTheDocument();
+  });
+});
+```
+
+**Reusable Response Factories:**
+
+```typescript
+// mocks/factories.ts
+import { faker } from '@faker-js/faker';
+
+export function createUser(overrides = {}) {
+  return {
+    id: faker.number.int(),
+    name: faker.person.fullName(),
+    email: faker.internet.email(),
+    createdAt: faker.date.recent().toISOString(),
+    ...overrides,
+  };
+}
+
+export function createUsers(count: number) {
+  return Array.from({ length: count }, () => createUser());
+}
+
+// In tests
+server.use(
+  http.get('/api/users', () => {
+    return HttpResponse.json(createUsers(10));
+  })
+);
+```
+
+**Senior insight:** MSW 2.0 represents a significant API change from 1.x - ensure you're using the correct syntax. Key benefits over jest.mock(fetch): (1) tests your actual fetch/axios code, (2) works with any HTTP client, (3) same handlers work in tests, Storybook, and development. Set `onUnhandledRequest: 'error'` in tests to catch missing handlers. Use response factories for realistic data that catches edge cases.
+
+---
+
+### Q: How do you test components using React Query/TanStack Query?
+
+**Answer:**
+
+Testing React Query requires proper QueryClient setup, cache management, and understanding of its async patterns.
+
+**QueryClient Setup for Tests:**
+
+```typescript
+// test-utils/react-query.tsx
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, RenderOptions } from '@testing-library/react';
+
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        // Don't retry on failure in tests
+        retry: false,
+        // Don't cache between tests
+        gcTime: 0,
+        // Don't refetch on window focus in tests
+        refetchOnWindowFocus: false,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+    // Suppress error logging in tests (optional)
+    logger: {
+      log: console.log,
+      warn: console.warn,
+      error: () => {},
+    },
+  });
+}
+
+export function renderWithQueryClient(
+  ui: React.ReactElement,
+  options?: Omit<RenderOptions, 'wrapper'>
+) {
+  const queryClient = createTestQueryClient();
+
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {children}
+      </QueryClientProvider>
+    );
+  }
+
+  return {
+    ...render(ui, { wrapper: Wrapper, ...options }),
+    queryClient,
+  };
+}
+```
+
+**Testing Queries:**
+
+```typescript
+import { renderWithQueryClient } from './test-utils/react-query';
+import { screen, waitFor } from '@testing-library/react';
+import { server } from './mocks/server';
+import { http, HttpResponse } from 'msw';
+import UserProfile from './UserProfile';
+
+test('displays user data after successful fetch', async () => {
+  server.use(
+    http.get('/api/users/:id', () => {
+      return HttpResponse.json({ id: 1, name: 'John Doe', email: 'john@test.com' });
+    })
+  );
+
+  renderWithQueryClient(<UserProfile userId="1" />);
+
+  // Check loading state
+  expect(screen.getByText('Loading...')).toBeInTheDocument();
+
+  // Wait for data
+  await waitFor(() => {
+    expect(screen.getByText('John Doe')).toBeInTheDocument();
+  });
+
+  expect(screen.getByText('john@test.com')).toBeInTheDocument();
+});
+
+test('displays error message on fetch failure', async () => {
+  server.use(
+    http.get('/api/users/:id', () => {
+      return HttpResponse.json({ message: 'User not found' }, { status: 404 });
+    })
+  );
+
+  renderWithQueryClient(<UserProfile userId="999" />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/error/i)).toBeInTheDocument();
+  });
+});
+```
+
+**Testing Mutations:**
+
+```typescript
+import userEvent from '@testing-library/user-event';
+
+test('updates user and invalidates cache', async () => {
+  const user = userEvent.setup();
+
+  // Initial user data
+  server.use(
+    http.get('/api/users/1', () => {
+      return HttpResponse.json({ id: 1, name: 'John', email: 'john@test.com' });
+    }),
+    http.patch('/api/users/1', async ({ request }) => {
+      const body = await request.json();
+      return HttpResponse.json({ id: 1, ...body });
+    })
+  );
+
+  const { queryClient } = renderWithQueryClient(<EditUserForm userId="1" />);
+
+  // Wait for initial data load
+  await waitFor(() => {
+    expect(screen.getByDisplayValue('John')).toBeInTheDocument();
+  });
+
+  // Update name
+  await user.clear(screen.getByLabelText('Name'));
+  await user.type(screen.getByLabelText('Name'), 'Jane');
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+
+  // Wait for mutation to complete
+  await waitFor(() => {
+    expect(screen.getByText('Saved!')).toBeInTheDocument();
+  });
+
+  // Verify cache was updated
+  const cachedUser = queryClient.getQueryData(['user', '1']);
+  expect(cachedUser).toEqual(expect.objectContaining({ name: 'Jane' }));
+});
+```
+
+**Testing Optimistic Updates:**
+
+```typescript
+test('shows optimistic update then reverts on error', async () => {
+  const user = userEvent.setup();
+  let callCount = 0;
+
+  server.use(
+    http.post('/api/todos', async () => {
+      callCount++;
+      // First call fails
+      if (callCount === 1) {
+        await new Promise(r => setTimeout(r, 100));
+        return HttpResponse.json({ error: 'Failed' }, { status: 500 });
+      }
+      return HttpResponse.json({ id: 1, text: 'New todo', completed: false });
+    })
+  );
+
+  renderWithQueryClient(<TodoList />);
+
+  await user.type(screen.getByPlaceholderText('Add todo'), 'New todo');
+  await user.click(screen.getByRole('button', { name: 'Add' }));
+
+  // Optimistic update should show immediately
+  expect(screen.getByText('New todo')).toBeInTheDocument();
+
+  // After error, optimistic update should be rolled back
+  await waitFor(() => {
+    expect(screen.queryByText('New todo')).not.toBeInTheDocument();
+  });
+
+  // Error should be shown
+  expect(screen.getByText(/failed/i)).toBeInTheDocument();
+});
+```
+
+**Testing Query Invalidation:**
+
+```typescript
+test('refetches data after invalidation', async () => {
+  const user = userEvent.setup();
+  let fetchCount = 0;
+
+  server.use(
+    http.get('/api/todos', () => {
+      fetchCount++;
+      if (fetchCount === 1) {
+        return HttpResponse.json([{ id: 1, text: 'Original', completed: false }]);
+      }
+      return HttpResponse.json([
+        { id: 1, text: 'Original', completed: false },
+        { id: 2, text: 'New item', completed: false },
+      ]);
+    }),
+    http.post('/api/todos', () => {
+      return HttpResponse.json({ id: 2, text: 'New item', completed: false });
+    })
+  );
+
+  const { queryClient } = renderWithQueryClient(<TodoApp />);
+
+  // Initial load
+  await waitFor(() => {
+    expect(screen.getByText('Original')).toBeInTheDocument();
+  });
+  expect(fetchCount).toBe(1);
+
+  // Add new todo (should invalidate and refetch)
+  await user.click(screen.getByRole('button', { name: 'Add Todo' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('New item')).toBeInTheDocument();
+  });
+
+  // Verify refetch occurred
+  expect(fetchCount).toBe(2);
+});
+```
+
+**Testing with Pre-populated Cache:**
+
+```typescript
+test('renders with pre-populated cache', async () => {
+  const queryClient = createTestQueryClient();
+
+  // Pre-populate cache (useful for testing cache-dependent behavior)
+  queryClient.setQueryData(['user', '1'], {
+    id: 1,
+    name: 'Cached User',
+    email: 'cached@test.com',
+  });
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <UserProfile userId="1" />
+    </QueryClientProvider>
+  );
+
+  // Should show cached data immediately (no loading state)
+  expect(screen.getByText('Cached User')).toBeInTheDocument();
+});
+```
+
+**Testing Infinite Queries:**
+
+```typescript
+test('loads more items on scroll', async () => {
+  const user = userEvent.setup();
+
+  server.use(
+    http.get('/api/posts', ({ request }) => {
+      const url = new URL(request.url);
+      const page = Number(url.searchParams.get('page')) || 1;
+
+      return HttpResponse.json({
+        posts: [
+          { id: page * 10 + 1, title: `Post ${page}-1` },
+          { id: page * 10 + 2, title: `Post ${page}-2` },
+        ],
+        nextPage: page < 3 ? page + 1 : null,
+      });
+    })
+  );
+
+  renderWithQueryClient(<InfinitePostList />);
+
+  // Initial load
+  await waitFor(() => {
+    expect(screen.getByText('Post 1-1')).toBeInTheDocument();
+  });
+
+  // Load more
+  await user.click(screen.getByRole('button', { name: 'Load More' }));
+
+  await waitFor(() => {
+    expect(screen.getByText('Post 2-1')).toBeInTheDocument();
+  });
+
+  // Previous items should still be visible
+  expect(screen.getByText('Post 1-1')).toBeInTheDocument();
+});
+```
+
+**Senior insight:** The key to testing React Query effectively is understanding its cache behavior. Always use a fresh QueryClient per test to prevent state leakage. Use `gcTime: 0` to prevent cache retention between tests. When testing mutations, verify both the UI update AND the cache state. For complex scenarios (optimistic updates, invalidation), test the full flow rather than mocking useQuery directly.
+
+---
+
+### Q: What are strategies for visual regression testing in React?
+
+**Answer:**
+
+Visual regression testing catches unintended UI changes by comparing screenshots. It's essential for design systems, component libraries, and UI-heavy applications.
+
+**Tool Options:**
+
+| Tool | Type | Pros | Cons |
+|------|------|------|------|
+| **Chromatic** | Cloud service | Storybook integration, review workflow | Paid for private projects |
+| **Percy** | Cloud service | Multi-browser, review workflow | Paid |
+| **Playwright** | Built-in screenshots | Free, full control | Self-managed, more setup |
+| **Storybook Test Runner** | Local/CI | Free, Storybook native | Less sophisticated diff |
+| **Loki** | Local | Free, works with Storybook | Docker required |
+
+**Storybook + Chromatic Setup:**
+
+```typescript
+// .storybook/main.ts
+import type { StorybookConfig } from '@storybook/react-vite';
+
+const config: StorybookConfig = {
+  stories: ['../src/**/*.stories.@(js|jsx|ts|tsx)'],
+  addons: [
+    '@storybook/addon-essentials',
+    '@chromatic-com/storybook', // Chromatic addon
+  ],
+};
+
+export default config;
+```
+
+```typescript
+// Button.stories.tsx
+import type { Meta, StoryObj } from '@storybook/react';
+import { Button } from './Button';
+
+const meta: Meta<typeof Button> = {
+  component: Button,
+  // Chromatic-specific settings
+  parameters: {
+    chromatic: {
+      // Capture multiple viewports
+      viewports: [320, 768, 1200],
+      // Delay for animations
+      delay: 300,
+    },
+  },
+};
+
+export default meta;
+type Story = StoryObj<typeof Button>;
+
+export const Primary: Story = {
+  args: {
+    variant: 'primary',
+    children: 'Primary Button',
+  },
+};
+
+export const Secondary: Story = {
+  args: {
+    variant: 'secondary',
+    children: 'Secondary Button',
+  },
+};
+
+// Story with interaction states
+export const Hover: Story = {
+  args: { variant: 'primary', children: 'Hover Me' },
+  parameters: {
+    pseudo: { hover: true }, // Chromatic hover state
+  },
+};
+
+export const Focused: Story = {
+  args: { variant: 'primary', children: 'Focus Me' },
+  parameters: {
+    pseudo: { focus: true },
+  },
+};
+
+// Disable chromatic for specific story
+export const Animation: Story = {
+  parameters: {
+    chromatic: { disableSnapshot: true }, // Skip animated stories
+  },
+};
+```
+
+**Playwright Visual Testing:**
+
+```typescript
+// tests/visual.spec.ts
+import { test, expect } from '@playwright/test';
+
+test.describe('Visual Regression Tests', () => {
+  test('homepage matches snapshot', async ({ page }) => {
+    await page.goto('/');
+
+    // Wait for content to load
+    await page.waitForSelector('[data-testid="hero-section"]');
+
+    // Full page screenshot
+    await expect(page).toHaveScreenshot('homepage.png', {
+      fullPage: true,
+      // Mask dynamic content
+      mask: [page.locator('[data-testid="timestamp"]')],
+    });
+  });
+
+  test('button states', async ({ page }) => {
+    await page.goto('/components/button');
+
+    const button = page.locator('button.primary');
+
+    // Default state
+    await expect(button).toHaveScreenshot('button-default.png');
+
+    // Hover state
+    await button.hover();
+    await expect(button).toHaveScreenshot('button-hover.png');
+
+    // Focus state
+    await button.focus();
+    await expect(button).toHaveScreenshot('button-focus.png');
+
+    // Disabled state
+    await page.locator('button.disabled').first().screenshot({
+      path: 'test-results/button-disabled.png',
+    });
+  });
+
+  test('responsive layout', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    // Mobile
+    await page.setViewportSize({ width: 375, height: 667 });
+    await expect(page).toHaveScreenshot('dashboard-mobile.png');
+
+    // Tablet
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(page).toHaveScreenshot('dashboard-tablet.png');
+
+    // Desktop
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(page).toHaveScreenshot('dashboard-desktop.png');
+  });
+});
+```
+
+**Playwright Configuration:**
+
+```typescript
+// playwright.config.ts
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests',
+  snapshotDir: './tests/__snapshots__',
+
+  // Screenshot comparison settings
+  expect: {
+    toHaveScreenshot: {
+      // Allow small differences (anti-aliasing, fonts)
+      maxDiffPixels: 100,
+      // Or percentage-based threshold
+      maxDiffPixelRatio: 0.01,
+      // Animation handling
+      animations: 'disabled',
+    },
+  },
+
+  // Update snapshots in CI
+  updateSnapshots: process.env.UPDATE_SNAPSHOTS === 'true' ? 'all' : 'missing',
+
+  projects: [
+    {
+      name: 'chromium',
+      use: { browserName: 'chromium' },
+    },
+    {
+      name: 'firefox',
+      use: { browserName: 'firefox' },
+    },
+    {
+      name: 'webkit',
+      use: { browserName: 'webkit' },
+    },
+  ],
+});
+```
+
+**Handling Dynamic Content:**
+
+```typescript
+test('page with dynamic content', async ({ page }) => {
+  await page.goto('/feed');
+
+  // Mask timestamps, avatars, or any dynamic content
+  await expect(page).toHaveScreenshot('feed.png', {
+    mask: [
+      page.locator('.timestamp'),
+      page.locator('.user-avatar'),
+      page.locator('[data-testid="ad-slot"]'),
+    ],
+  });
+
+  // Or hide elements entirely
+  await page.addStyleTag({
+    content: `
+      .timestamp { visibility: hidden !important; }
+      .user-avatar { background: gray !important; }
+    `,
+  });
+  await expect(page).toHaveScreenshot('feed-normalized.png');
+});
+
+// Wait for fonts and images to load
+test('page with lazy content', async ({ page }) => {
+  await page.goto('/gallery');
+
+  // Wait for all images
+  await page.waitForFunction(() => {
+    const images = document.querySelectorAll('img');
+    return Array.from(images).every(img => img.complete);
+  });
+
+  // Wait for fonts
+  await page.waitForFunction(() => document.fonts.ready);
+
+  // Small delay for any animations
+  await page.waitForTimeout(500);
+
+  await expect(page).toHaveScreenshot('gallery.png');
+});
+```
+
+**Component-Level Visual Testing with Storybook:**
+
+```typescript
+// Button.test.ts (using @storybook/test-runner)
+import { test, expect } from '@storybook/test';
+
+// Visual test runs against compiled Storybook
+test('Button - primary variant', async ({ page }) => {
+  await page.goto('/iframe.html?id=button--primary');
+
+  // Wait for story to render
+  await page.waitForSelector('.storybook-button');
+
+  // Component screenshot
+  const button = page.locator('.storybook-button');
+  await expect(button).toHaveScreenshot();
+});
+```
+
+**CI Integration:**
+
+```yaml
+# .github/workflows/visual-tests.yml
+name: Visual Regression Tests
+
+on: [push, pull_request]
+
+jobs:
+  visual-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Build Storybook
+        run: npm run build-storybook
+
+      - name: Run Chromatic
+        uses: chromaui/action@latest
+        with:
+          projectToken: ${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+          buildScriptName: build-storybook
+
+      # OR Playwright visual tests
+      - name: Run Playwright tests
+        run: npx playwright test --project=chromium
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: visual-test-results
+          path: test-results/
+```
+
+**Best Practices:**
+
+| Practice | Reason |
+|----------|--------|
+| Test in CI only | Local rendering varies (fonts, GPU) |
+| Use consistent viewport sizes | Responsive layouts cause false positives |
+| Mask dynamic content | Timestamps, avatars cause failures |
+| Disable animations | Animation frames cause flaky tests |
+| Review changes, don't auto-approve | Visual tests need human judgment |
+| Test key states | Default, hover, focus, disabled, error |
+| Component-level over page-level | Smaller diffs, faster debugging |
+
+**Senior insight:** Visual regression testing is best for component libraries and design systems where pixel-perfect consistency matters. For applications, it can be noisy due to content changes. Use it strategically - test core UI components, not every page. Chromatic's workflow is excellent for team collaboration (designers can approve changes). Playwright is great for full control and self-hosting. Always mask or mock dynamic content to avoid false positives.
+
+---
+
+### Q: How do you test components with complex async behavior like debouncing, polling, and race conditions?
+
+**Answer:**
+
+Testing complex async patterns requires understanding timing, proper timer mocking, and careful assertion strategies.
+
+**Testing Debounced Inputs:**
+
+```typescript
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+// Component with debounced search
+function SearchBox({ onSearch, debounceMs = 300 }) {
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (query) onSearch(query);
+    }, debounceMs);
+    return () => clearTimeout(timer);
+  }, [query, debounceMs, onSearch]);
+
+  return <input value={query} onChange={(e) => setQuery(e.target.value)} />;
+}
+
+// Test with fake timers
+test('debounces search input', async () => {
+  jest.useFakeTimers();
+  const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+  const onSearch = jest.fn();
+
+  render(<SearchBox onSearch={onSearch} debounceMs={300} />);
+
+  // Type quickly
+  await user.type(screen.getByRole('textbox'), 'react');
+
+  // Search should NOT have been called yet
+  expect(onSearch).not.toHaveBeenCalled();
+
+  // Advance timers past debounce
+  jest.advanceTimersByTime(300);
+
+  // Now search should be called with final value
+  expect(onSearch).toHaveBeenCalledTimes(1);
+  expect(onSearch).toHaveBeenCalledWith('react');
+
+  jest.useRealTimers();
+});
+
+test('cancels pending search when typing continues', async () => {
+  jest.useFakeTimers();
+  const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+  const onSearch = jest.fn();
+
+  render(<SearchBox onSearch={onSearch} debounceMs={300} />);
+
+  await user.type(screen.getByRole('textbox'), 'rea');
+
+  // Advance part way
+  jest.advanceTimersByTime(200);
+
+  // Type more (should reset timer)
+  await user.type(screen.getByRole('textbox'), 'ct');
+
+  // Advance another 200ms (total 400ms from first keystroke)
+  jest.advanceTimersByTime(200);
+
+  // Still shouldn't have fired (timer was reset)
+  expect(onSearch).not.toHaveBeenCalled();
+
+  // Advance remaining time
+  jest.advanceTimersByTime(100);
+
+  // Now it should fire with complete value
+  expect(onSearch).toHaveBeenCalledWith('react');
+  expect(onSearch).toHaveBeenCalledTimes(1);
+
+  jest.useRealTimers();
+});
+```
+
+**Testing Polling:**
+
+```typescript
+function PollingStatus({ pollInterval = 5000 }) {
+  const [status, setStatus] = useState('unknown');
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      const response = await fetch('/api/status');
+      const data = await response.json();
+      setStatus(data.status);
+    };
+
+    fetchStatus(); // Initial fetch
+    const interval = setInterval(fetchStatus, pollInterval);
+
+    return () => clearInterval(interval);
+  }, [pollInterval]);
+
+  return <div data-testid="status">{status}</div>;
+}
+
+test('polls for status updates', async () => {
+  jest.useFakeTimers();
+  let pollCount = 0;
+
+  server.use(
+    http.get('/api/status', () => {
+      pollCount++;
+      const statuses = ['pending', 'processing', 'complete'];
+      return HttpResponse.json({
+        status: statuses[Math.min(pollCount - 1, 2)],
+      });
+    })
+  );
+
+  render(<PollingStatus pollInterval={1000} />);
+
+  // Initial fetch
+  await waitFor(() => {
+    expect(screen.getByTestId('status')).toHaveTextContent('pending');
+  });
+  expect(pollCount).toBe(1);
+
+  // Advance to second poll
+  jest.advanceTimersByTime(1000);
+  await waitFor(() => {
+    expect(screen.getByTestId('status')).toHaveTextContent('processing');
+  });
+  expect(pollCount).toBe(2);
+
+  // Advance to third poll
+  jest.advanceTimersByTime(1000);
+  await waitFor(() => {
+    expect(screen.getByTestId('status')).toHaveTextContent('complete');
+  });
+  expect(pollCount).toBe(3);
+
+  jest.useRealTimers();
+});
+
+test('stops polling on unmount', async () => {
+  jest.useFakeTimers();
+  let pollCount = 0;
+
+  server.use(
+    http.get('/api/status', () => {
+      pollCount++;
+      return HttpResponse.json({ status: 'ok' });
+    })
+  );
+
+  const { unmount } = render(<PollingStatus pollInterval={1000} />);
+
+  // Initial fetch
+  await waitFor(() => expect(pollCount).toBe(1));
+
+  // Unmount
+  unmount();
+
+  // Advance time - should NOT trigger more fetches
+  jest.advanceTimersByTime(5000);
+
+  expect(pollCount).toBe(1);
+
+  jest.useRealTimers();
+});
+```
+
+**Testing Race Conditions:**
+
+```typescript
+function TypeaheadSearch() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+
+  useEffect(() => {
+    if (!query) {
+      setResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    fetch(`/api/search?q=${query}`, { signal: controller.signal })
+      .then(res => res.json())
+      .then(data => setResults(data.results))
+      .catch(err => {
+        if (err.name !== 'AbortError') console.error(err);
+      });
+
+    return () => controller.abort();
+  }, [query]);
+
+  return (
+    <div>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        data-testid="search-input"
+      />
+      <ul>
+        {results.map((r, i) => <li key={i}>{r}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+test('handles race conditions - only shows final result', async () => {
+  const user = userEvent.setup();
+  const responses: Record<string, string[]> = {
+    'a': ['apple', 'apricot'],
+    'ab': ['abstract', 'absorb'],
+    'abc': ['abcd', 'abcde'],
+  };
+
+  // Delay responses to create race condition potential
+  server.use(
+    http.get('/api/search', async ({ request }) => {
+      const url = new URL(request.url);
+      const q = url.searchParams.get('q') || '';
+
+      // Longer queries return faster (simulating real-world)
+      const delay = q.length === 1 ? 300 : q.length === 2 ? 200 : 100;
+      await new Promise(r => setTimeout(r, delay));
+
+      return HttpResponse.json({ results: responses[q] || [] });
+    })
+  );
+
+  render(<TypeaheadSearch />);
+
+  // Type quickly - creates overlapping requests
+  await user.type(screen.getByTestId('search-input'), 'abc');
+
+  // Wait for results to settle
+  await waitFor(() => {
+    expect(screen.getByText('abcd')).toBeInTheDocument();
+  });
+
+  // Should ONLY show results for 'abc', NOT for 'a' or 'ab'
+  expect(screen.queryByText('apple')).not.toBeInTheDocument();
+  expect(screen.queryByText('abstract')).not.toBeInTheDocument();
+});
+```
+
+**Testing Retry Logic:**
+
+```typescript
+function DataFetcher({ maxRetries = 3 }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
+
+  useEffect(() => {
+    let attempt = 0;
+    let cancelled = false;
+
+    async function fetchWithRetry() {
+      while (attempt < maxRetries && !cancelled) {
+        try {
+          const response = await fetch('/api/data');
+          if (!response.ok) throw new Error('Failed');
+          const data = await response.json();
+          if (!cancelled) setData(data);
+          return;
+        } catch (err) {
+          attempt++;
+          if (!cancelled) setRetryCount(attempt);
+          if (attempt < maxRetries) {
+            await new Promise(r => setTimeout(r, 1000 * attempt)); // Exponential backoff
+          }
+        }
+      }
+      if (!cancelled) setError('Max retries exceeded');
+    }
+
+    fetchWithRetry();
+    return () => { cancelled = true; };
+  }, [maxRetries]);
+
+  return (
+    <div>
+      <span data-testid="retry-count">{retryCount}</span>
+      {error && <span data-testid="error">{error}</span>}
+      {data && <span data-testid="data">{data.value}</span>}
+    </div>
+  );
+}
+
+test('retries on failure with backoff', async () => {
+  jest.useFakeTimers();
+  let callCount = 0;
+
+  server.use(
+    http.get('/api/data', () => {
+      callCount++;
+      // Fail first 2 attempts, succeed on 3rd
+      if (callCount < 3) {
+        return HttpResponse.json({ error: 'Server error' }, { status: 500 });
+      }
+      return HttpResponse.json({ value: 'Success!' });
+    })
+  );
+
+  render(<DataFetcher maxRetries={3} />);
+
+  // First attempt fails
+  await waitFor(() => {
+    expect(screen.getByTestId('retry-count')).toHaveTextContent('1');
+  });
+
+  // Advance past first backoff (1 second)
+  jest.advanceTimersByTime(1000);
+
+  // Second attempt fails
+  await waitFor(() => {
+    expect(screen.getByTestId('retry-count')).toHaveTextContent('2');
+  });
+
+  // Advance past second backoff (2 seconds)
+  jest.advanceTimersByTime(2000);
+
+  // Third attempt succeeds
+  await waitFor(() => {
+    expect(screen.getByTestId('data')).toHaveTextContent('Success!');
+  });
+
+  expect(callCount).toBe(3);
+  jest.useRealTimers();
+});
+```
+
+**Testing Concurrent Updates:**
+
+```typescript
+test('handles concurrent state updates correctly', async () => {
+  const user = userEvent.setup();
+
+  function Counter() {
+    const [count, setCount] = useState(0);
+
+    const incrementAsync = async () => {
+      await new Promise(r => setTimeout(r, 100));
+      setCount(c => c + 1); // Functional update is key
+    };
+
+    return (
+      <div>
+        <span data-testid="count">{count}</span>
+        <button onClick={incrementAsync}>Increment</button>
+      </div>
+    );
+  }
+
+  jest.useFakeTimers();
+  render(<Counter />);
+
+  // Click multiple times rapidly
+  const button = screen.getByRole('button');
+  await user.click(button);
+  await user.click(button);
+  await user.click(button);
+
+  // Advance time for all async operations
+  jest.advanceTimersByTime(100);
+
+  // All increments should be applied
+  await waitFor(() => {
+    expect(screen.getByTestId('count')).toHaveTextContent('3');
+  });
+
+  jest.useRealTimers();
+});
+```
+
+**Senior insight:** The key to testing async patterns is controlling time. Always use `jest.useFakeTimers()` or Vitest's `vi.useFakeTimers()` for deterministic tests. For userEvent with fake timers, pass `advanceTimers` option. Test the edge cases: (1) cancellation on unmount, (2) race conditions with rapid input, (3) retry exhaustion. Remember to clean up timers with `jest.useRealTimers()` to avoid affecting other tests.
+
+---
+
