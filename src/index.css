@@ -230,7 +230,7 @@ body {
 .prose pre code {
   background-color: transparent;
   padding: 0;
-  color: #f3f4f6;
+  /* Let highlight.js handle the syntax colors */
 }
 
 .prose table {

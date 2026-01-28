@@ -8,6 +8,9 @@ import css from 'highlight.js/lib/languages/css';
 import bash from 'highlight.js/lib/languages/bash';
 import json from 'highlight.js/lib/languages/json';
 
+// Import Highlight.js theme
+import 'highlight.js/styles/atom-one-dark.css';
+
 // Register languages
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('js', javascript);
